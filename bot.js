@@ -26,7 +26,7 @@ async function askGroq(userMessage, chatHistory = []) {
     const messages = [
         {
             role: 'system',
-            content: 'Ты — карьерный консультант. Отвечай полезно и кратко. Если пользователь просит детали, объясни. Если хочет другую профессию — предложи альтернативу.'
+            content: 'Ты — карьерный консультант. Отвечай полезно и кратко. Если пользователь просит детали, объясни. Если хочет другую профессию — предложи альтернативу. Не пиши разными видами шрифтов. Не используй *Markdown*.'
         },
         ...chatHistory,
         { role: 'user', content: userMessage }
@@ -50,22 +50,43 @@ async function askGroq(userMessage, chatHistory = []) {
     return data.choices?.[0]?.message?.content || 'Ошибка';
 }
 
-async function getVacancies(profession) {
+const vacancyCache = {};
+
+async function getVacancies(profession, chatId) {
+    const cacheKey = profession.toLowerCase().trim();
+    const cached = vacancyCache[cacheKey];
+
+    // Если есть кэш и он не старше 24 часов — вернуть из кэша
+    if (cached && (Date.now() - cached.timestamp) < 24 * 60 * 60 * 1000) {
+        return cached.data;
+    }
+
+    // Иначе — парсим заново
     try {
         const response = await axios.get('https://api.hh.ru/vacancies', {
             params: { text: profession, area: 113, per_page: 5 },
             headers: { 'User-Agent': 'CareerBot/1.0' }
         });
+
         const vacancies = response.data.items;
-        if (!vacancies.length) return 'Вакансий не найдено';
-        return vacancies.map((v, i) => {
+        if (!vacancies || !vacancies.length) return 'Вакансий не найдено';
+
+        const result = vacancies.map((v, i) => {
             const title = v.name;
             const url = v.alternate_url;
-            const salary = v.salary ? 
-                `${v.salary.from || '?'} - ${v.salary.to || '?'} ${v.salary.currency || 'RUR'}` : 
-                'з/п не указана';
+            const salary = v.salary
+                ? `${v.salary.from || '?'} - ${v.salary.to || '?'} ${v.salary.currency || 'RUR'}`
+                : 'з/п не указана';
             return `${i + 1}. ${title}\n💰 ${salary}\n🔗 ${url}`;
         }).join('\n\n');
+
+        // Сохраняем в кэш
+        vacancyCache[cacheKey] = {
+            data: result,
+            timestamp: Date.now()
+        };
+
+        return result;
     } catch (err) {
         return 'Ошибка при поиске вакансий';
     }
