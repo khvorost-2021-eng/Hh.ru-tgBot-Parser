@@ -72,3 +72,8 @@ bot.on('message', async (msg) => {
         delete userAnswers[chatId];
     }
 });
+
+// Фиктивный сервер для Render (чтобы был открытый порт)
+require('http').createServer((req, res) => res.end('OK')).listen(process.env.PORT || 10000, () => {
+    console.log('Порт открыт для Render');
+});
