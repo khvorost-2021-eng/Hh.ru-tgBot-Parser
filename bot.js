@@ -1,5 +1,4 @@
 const TelegramBot = require('node-telegram-bot-api');
-const axios = require('axios');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -26,7 +25,7 @@ async function askGroq(userMessage, chatHistory = []) {
     const messages = [
         {
             role: 'system',
-            content: 'Ты — карьерный консультант. Предложи 3 профессии. Для каждой: название, краткое описание, примерная зарплата в рублях. Формат: 1. Профессия — описание — зарплата. Если ответы неразборчивы — переспроси. Не используй Markdown.'
+            content: 'Ты — карьерный консультант. Предложи 3 профессии на основе ответов пользователя. Для каждой: название, краткое описание (1 предложение), примерная зарплата в рублях. После рекомендаций дай совет: какие ключевые слова использовать при поиске вакансий на сайтах вроде hh.ru. Если ответы пользователя неразборчивы — переспроси. Не используй Markdown.'
         },
         ...chatHistory,
         { role: 'user', content: userMessage }
@@ -48,31 +47,6 @@ async function askGroq(userMessage, chatHistory = []) {
 
     const data = await response.json();
     return data.choices?.[0]?.message?.content || 'Извини, я не понял. Попробуй написать иначе.';
-}
-
-async function getVacancies(profession) {
-    try {
-        const response = await axios.get('https://api.hh.ru/vacancies', {
-            params: { text: profession, area: 113, per_page: 5 },
-            headers: { 'User-Agent': 'CareerBot/1.0' }
-        });
-
-        const vacancies = response.data.items;
-        if (!vacancies || !vacancies.length) {
-            return 'Вакансий не найдено. Попробуй уточнить профессию.';
-        }
-
-        return vacancies.map((v, i) => {
-            const title = v.name;
-            const url = v.alternate_url;
-            const salary = v.salary
-                ? `${v.salary.from || '?'} - ${v.salary.to || '?'} ${v.salary.currency || 'RUR'}`
-                : 'з/п не указана';
-            return `${i + 1}. ${title}\n💰 ${salary}\n🔗 ${url}`;
-        }).join('\n\n');
-    } catch (err) {
-        return 'Ошибка при поиске вакансий';
-    }
 }
 
 function isAdequate(text) {
@@ -138,19 +112,14 @@ bot.on('message', async (msg) => {
         } else {
             const thinking = await bot.sendMessage(chatId, 'Анализирую...');
             const summary = session.answers.join('\n');
-            const professions = await askGroq(`Ответы пользователя:\n${summary}\n\nПредложи 3 профессии.`);
-            const firstProfession = professions.split('\n')[0].replace(/^\d+\.\s*/, '').split('—')[0].trim();
-            const links = await getVacancies(firstProfession);
+            const result = await askGroq(`Ответы пользователя:\n${summary}\n\nПредложи 3 профессии и дай советы по поиску вакансий.`);
             
             await bot.deleteMessage(chatId, thinking.message_id);
-            
-            const finalMessage = `🤖 *Рекомендованные профессии:*\n\n${professions}\n\n📋 *Вакансии по первой профессии:*\n\n${links}\n\n💬 *Теперь ты можешь задать мне любые вопросы. Напиши /reset чтобы начать заново.*`;
-            
-            bot.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
+            bot.sendMessage(chatId, result);
             
             session.state = 'chat';
             session.chatHistory = [
-                { role: 'assistant', content: professions }
+                { role: 'assistant', content: result }
             ];
         }
     }
