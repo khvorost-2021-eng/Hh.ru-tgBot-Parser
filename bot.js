@@ -16,6 +16,11 @@ const questions = [
     'Сколько часов в день готов работать? (2-4, 4-8, 8+)'
 ];
 
+process.on('SIGTERM', () => {
+    bot.stop();
+    process.exit(0);
+});
+
 async function askGroq(userMessage, chatHistory = []) {
     const messages = [
         {
