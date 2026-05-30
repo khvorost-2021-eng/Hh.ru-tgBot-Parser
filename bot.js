@@ -26,7 +26,7 @@ async function askGroq(userMessage, chatHistory = []) {
     const messages = [
         {
             role: 'system',
-            content: 'Ты — карьерный консультант. Предложи 3 профессии. Для каждой дай название, краткое описание и примерную зарплату. Формат: 1. Профессия — описание — зарплата. Не используй форматирование.'
+            content: 'Ты — карьерный консультант. Предложи 3 профессии. Для каждой: название, краткое описание, примерная зарплата в рублях. Формат: 1. Профессия — описание — зарплата. Если ответы неразборчивы — переспроси. Не используй Markdown.'
         },
         ...chatHistory,
         { role: 'user', content: userMessage }
@@ -47,21 +47,10 @@ async function askGroq(userMessage, chatHistory = []) {
     });
 
     const data = await response.json();
-    return data.choices?.[0]?.message?.content || 'Ошибка';
+    return data.choices?.[0]?.message?.content || 'Извини, я не понял. Попробуй написать иначе.';
 }
 
-const vacancyCache = {};
-
-async function getVacancies(profession, chatId) {
-    const cacheKey = profession.toLowerCase().trim();
-    const cached = vacancyCache[cacheKey];
-
-    // Если есть кэш и он не старше 24 часов — вернуть из кэша
-    if (cached && (Date.now() - cached.timestamp) < 24 * 60 * 60 * 1000) {
-        return cached.data;
-    }
-
-    // Иначе — парсим заново
+async function getVacancies(profession) {
     try {
         const response = await axios.get('https://api.hh.ru/vacancies', {
             params: { text: profession, area: 113, per_page: 5 },
@@ -69,9 +58,11 @@ async function getVacancies(profession, chatId) {
         });
 
         const vacancies = response.data.items;
-        if (!vacancies || !vacancies.length) return 'Вакансий не найдено';
+        if (!vacancies || !vacancies.length) {
+            return 'Вакансий не найдено. Попробуй уточнить профессию.';
+        }
 
-        const result = vacancies.map((v, i) => {
+        return vacancies.map((v, i) => {
             const title = v.name;
             const url = v.alternate_url;
             const salary = v.salary
@@ -79,20 +70,19 @@ async function getVacancies(profession, chatId) {
                 : 'з/п не указана';
             return `${i + 1}. ${title}\n💰 ${salary}\n🔗 ${url}`;
         }).join('\n\n');
-
-        // Сохраняем в кэш
-        vacancyCache[cacheKey] = {
-            data: result,
-            timestamp: Date.now()
-        };
-
-        return result;
     } catch (err) {
         return 'Ошибка при поиске вакансий';
     }
 }
 
-// /start
+function isAdequate(text) {
+    const garbage = ['ау', 'поп', 'рэп', 'джаз', 'мам', 'а', 'б', 'в', 'г', 'д', 'е', 'ж', 'хз', 'не знаю', '...', 'ку', 'привет', 'пока', 'да', 'нет'];
+    const lower = text.toLowerCase().trim();
+    if (garbage.includes(lower)) return false;
+    if (lower.length < 3) return false;
+    return true;
+}
+
 bot.onText(/\/start/, (msg) => {
     userSessions[msg.chat.id] = { 
         state: 'survey', 
@@ -104,17 +94,26 @@ bot.onText(/\/start/, (msg) => {
     bot.sendMessage(msg.chat.id, questions[0]);
 });
 
-// Обработка сообщений
+bot.onText(/\/reset/, (msg) => {
+    userSessions[msg.chat.id] = { 
+        state: 'survey', 
+        step: 0, 
+        answers: [],
+        chatHistory: []
+    };
+    bot.sendMessage(msg.chat.id, 'Начинаем заново!');
+    bot.sendMessage(msg.chat.id, questions[0]);
+});
+
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
 
-    if (text === '/start') return;
+    if (text === '/start' || text === '/reset') return;
 
     const session = userSessions[chatId];
     if (!session) return;
 
-    // Режим свободного общения
     if (session.state === 'chat') {
         const thinking = await bot.sendMessage(chatId, 'Думаю...');
         session.chatHistory.push({ role: 'user', content: text });
@@ -125,8 +124,12 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // Режим опроса
     if (session.state === 'survey') {
+        if (!isAdequate(text)) {
+            bot.sendMessage(chatId, 'Пожалуйста, ответь развёрнуто. Это поможет мне точнее подобрать профессию.');
+            return;
+        }
+
         session.answers.push(`${questions[session.step]}: ${text}`);
         session.step++;
 
@@ -141,7 +144,7 @@ bot.on('message', async (msg) => {
             
             await bot.deleteMessage(chatId, thinking.message_id);
             
-            const finalMessage = `🤖 *Рекомендованные профессии:*\n\n${professions}\n\n📋 *Вакансии по первой профессии:*\n\n${links}\n\n💬 *Теперь ты можешь задать мне любые вопросы: уточнить про профессии, попросить найти другую, спросить совета.*`;
+            const finalMessage = `🤖 *Рекомендованные профессии:*\n\n${professions}\n\n📋 *Вакансии по первой профессии:*\n\n${links}\n\n💬 *Теперь ты можешь задать мне любые вопросы. Напиши /reset чтобы начать заново.*`;
             
             bot.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
             
@@ -153,7 +156,6 @@ bot.on('message', async (msg) => {
     }
 });
 
-// Фиктивный сервер для Render
 require('http').createServer((req, res) => res.end('OK')).listen(process.env.PORT || 10000, () => {
     console.log('Бот запущен');
 });
