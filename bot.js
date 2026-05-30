@@ -16,7 +16,16 @@ const questions = [
     'Сколько часов в день готов работать? (2-4, 4-8, 8+)'
 ];
 
-async function askGroq(userMessage) {
+async function askGroq(userMessage, chatHistory = []) {
+    const messages = [
+        {
+            role: 'system',
+            content: 'Ты — карьерный консультант. Отвечай полезно и кратко. Если пользователь просит детали, объясни. Если хочет другую профессию — предложи альтернативу.'
+        },
+        ...chatHistory,
+        { role: 'user', content: userMessage }
+    ];
+
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -25,13 +34,7 @@ async function askGroq(userMessage) {
         },
         body: JSON.stringify({
             model: 'llama-3.1-8b-instant',
-            messages: [
-                {
-                    role: 'system',
-                    content: 'Ты — карьерный консультант. На основе ответов пользователя предложи 3 профессии, которые ему подходят. Для каждой укажи: название, краткое описание (1 предложение), примерную зарплату. Отвечай строго по формату: 1. Профессия — описание — зарплата.'
-                },
-                { role: 'user', content: userMessage }
-            ],
+            messages: messages,
             max_tokens: 2000,
             temperature: 0.7
         })
@@ -41,39 +44,90 @@ async function askGroq(userMessage) {
     return data.choices?.[0]?.message?.content || 'Ошибка';
 }
 
+async function getVacancies(profession) {
+    try {
+        const response = await axios.get('https://api.hh.ru/vacancies', {
+            params: { text: profession, area: 113, per_page: 5 },
+            headers: { 'User-Agent': 'CareerBot/1.0' }
+        });
+        const vacancies = response.data.items;
+        if (!vacancies.length) return 'Вакансий не найдено';
+        return vacancies.map((v, i) => {
+            const title = v.name;
+            const url = v.alternate_url;
+            const salary = v.salary ? 
+                `${v.salary.from || '?'} - ${v.salary.to || '?'} ${v.salary.currency || 'RUR'}` : 
+                'з/п не указана';
+            return `${i + 1}. ${title}\n💰 ${salary}\n🔗 ${url}`;
+        }).join('\n\n');
+    } catch (err) {
+        return 'Ошибка при поиске вакансий';
+    }
+}
+
 // /start
 bot.onText(/\/start/, (msg) => {
-    userAnswers[msg.chat.id] = { step: 0, answers: [] };
-    bot.sendMessage(msg.chat.id, 'Привет! Я помогу тебе найти профессию. Сейчас задам несколько вопросов.');
+    userSessions[msg.chat.id] = { 
+        state: 'survey', 
+        step: 0, 
+        answers: [],
+        chatHistory: []
+    };
+    bot.sendMessage(msg.chat.id, 'Привет! Я помогу найти профессию. Сейчас задам несколько вопросов.');
     bot.sendMessage(msg.chat.id, questions[0]);
 });
 
-// Ответы
+// Обработка сообщений
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
 
     if (text === '/start') return;
 
-    const session = userAnswers[chatId];
+    const session = userSessions[chatId];
     if (!session) return;
 
-    session.answers.push(`${questions[session.step]}: ${text}`);
-    session.step++;
-
-    if (session.step < questions.length) {
-        bot.sendMessage(chatId, questions[session.step]);
-    } else {
-        const thinking = await bot.sendMessage(chatId, 'Анализирую ответы...');
-        const summary = session.answers.join('\n');
-        const result = await askGroq(`Вот ответы пользователя:\n${summary}\n\nПредложи 3 профессии.`);
+    // Режим свободного общения
+    if (session.state === 'chat') {
+        const thinking = await bot.sendMessage(chatId, 'Думаю...');
+        session.chatHistory.push({ role: 'user', content: text });
+        const reply = await askGroq(text, session.chatHistory);
+        session.chatHistory.push({ role: 'assistant', content: reply });
         await bot.deleteMessage(chatId, thinking.message_id);
-        bot.sendMessage(chatId, result);
-        delete userAnswers[chatId];
+        bot.sendMessage(chatId, reply);
+        return;
+    }
+
+    // Режим опроса
+    if (session.state === 'survey') {
+        session.answers.push(`${questions[session.step]}: ${text}`);
+        session.step++;
+
+        if (session.step < questions.length) {
+            bot.sendMessage(chatId, questions[session.step]);
+        } else {
+            const thinking = await bot.sendMessage(chatId, 'Анализирую...');
+            const summary = session.answers.join('\n');
+            const professions = await askGroq(`Ответы пользователя:\n${summary}\n\nПредложи 3 профессии.`);
+            const firstProfession = professions.split('\n')[0].replace(/^\d+\.\s*/, '').split('—')[0].trim();
+            const links = await getVacancies(firstProfession);
+            
+            await bot.deleteMessage(chatId, thinking.message_id);
+            
+            const finalMessage = `🤖 *Рекомендованные профессии:*\n\n${professions}\n\n📋 *Вакансии по первой профессии:*\n\n${links}\n\n💬 *Теперь ты можешь задать мне любые вопросы: уточнить про профессии, попросить найти другую, спросить совета.*`;
+            
+            bot.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
+            
+            // Переключаем в режим чата
+            session.state = 'chat';
+            session.chatHistory = [
+                { role: 'assistant', content: professions }
+            ];
+        }
     }
 });
 
-// Фиктивный сервер для Render (чтобы был открытый порт)
+// Фиктивный сервер для Render
 require('http').createServer((req, res) => res.end('OK')).listen(process.env.PORT || 10000, () => {
-    console.log('Порт открыт для Render');
+    console.log('Бот запущен');
 });
