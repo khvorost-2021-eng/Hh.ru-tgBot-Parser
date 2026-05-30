@@ -1,11 +1,12 @@
 const TelegramBot = require('node-telegram-bot-api');
+const axios = require('axios');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-const userAnswers = {};
+const userSessions = {};
 
 const questions = [
     'Какие предметы тебе нравились в школе? (математика, физика, литература, биология, информатика)',
@@ -123,7 +124,6 @@ bot.on('message', async (msg) => {
             
             bot.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
             
-            // Переключаем в режим чата
             session.state = 'chat';
             session.chatHistory = [
                 { role: 'assistant', content: professions }
