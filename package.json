@@ -1,16 +1,13 @@
 {
-  "name": "tg-bot.hh.ruparser",
+  "name": "hh-bot",
   "version": "1.0.0",
-  "description": "",
-  "main": "bot.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node bot.js",
+    "build": "npm install"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
-    "node-telegram-bot-api": "^0.67.0"
+    "node-telegram-bot-api": "^0.65.1",
+    "axios": "^1.6.0",
+    "cheerio": "^1.0.0"
   }
 }
